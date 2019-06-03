@@ -150,10 +150,7 @@ func (shard *indexShard) lookup(matchers []*labels.Matcher) []model.Fingerprint 
 	shard.mtx.RLock()
 	defer shard.mtx.RUnlock()
 
-	// per-shard intersection is initially nil, which is a special case
-	// meaning "everything" when passed to intersect()
-	// loop invariant: result is sorted
-	var result []model.Fingerprint
+	var intersectList []model.Fingerprints
 	for _, matcher := range matchers {
 		values, ok := shard.idx[matcher.Name]
 		if !ok {
@@ -173,13 +170,13 @@ func (shard *indexShard) lookup(matchers []*labels.Matcher) []model.Fingerprint 
 			}
 			sort.Sort(toIntersect)
 		}
-		result = intersect(result, toIntersect)
-		if len(result) == 0 {
+		if len(toIntersect) == 0 {
 			return nil
 		}
+		intersectList = append(intersectList, toIntersect)
 	}
 
-	return result
+	return intersect(intersectList...)
 }
 
 func (shard *indexShard) labelNames() []string {
@@ -247,23 +244,45 @@ func (shard *indexShard) delete(labels labels.Labels, fp model.Fingerprint) {
 	}
 }
 
-// intersect two sorted lists of fingerprints.  Assumes there are no duplicate
-// fingerprints within the input lists.
-func intersect(a, b []model.Fingerprint) []model.Fingerprint {
-	if a == nil {
-		return b
-	}
+// intersect intersects N sorted lists of fingerprints.
+func intersect(fpsSet ...model.Fingerprints) []model.Fingerprint {
+	numSets := len(fpsSet)
 	result := []model.Fingerprint{}
-	for i, j := 0, 0; i < len(a) && j < len(b); {
-		if a[i] == b[j] {
-			result = append(result, a[i])
+	idx := make([]int, numSets)
+	cur := model.Fingerprint(0)
+
+Outer:
+	for {
+	Inner:
+		for {
+			for i := 0; i < numSets; i++ {
+				id := idx[i]
+				set := fpsSet[i]
+				for id < len(set) && set[id] < cur {
+					id++
+				}
+				idx[i] = id
+				if set[id] > cur {
+					cur = set[id]
+					continue Inner
+				}
+			}
+
+			result = append(result, cur)
+			break Inner
 		}
-		if a[i] < b[j] {
-			i++
-		} else {
-			j++
+
+		for i := 0; i < numSets; i++ {
+			idx[i]++
+			if idx[i] >= len(fpsSet[i]) {
+				break Outer
+			}
+			if fpsSet[i][idx[i]] > cur {
+				cur = fpsSet[i][idx[i]]
+			}
 		}
 	}
+
 	return result
 }
 

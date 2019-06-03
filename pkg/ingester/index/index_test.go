@@ -70,7 +70,32 @@ func BenchmarkIndexLookup(t *testing.B) {
 		{
 			numSeries:         10,
 			numSamples:        100000,
-			percentageOverlap: 50,
+			percentageOverlap: 40,
+		},
+		{
+			numSeries:         10,
+			numSamples:        100000,
+			percentageOverlap: 90,
+		},
+		{
+			numSeries:         5,
+			numSamples:        1000000,
+			percentageOverlap: 40,
+		},
+		{
+			numSeries:         5,
+			numSamples:        1000000,
+			percentageOverlap: 90,
+		},
+		{
+			numSeries:         100000,
+			numSamples:        100,
+			percentageOverlap: 40,
+		},
+		{
+			numSeries:         100000,
+			numSamples:        100,
+			percentageOverlap: 90,
 		},
 	}
 
