@@ -142,6 +142,8 @@ func (c *Config) Validate() error {
 
 // Cortex is the root datastructure for Cortex.
 type Cortex struct {
+	cfg Config
+
 	target             moduleName
 	httpAuthMiddleware middleware.Interface
 
@@ -159,6 +161,8 @@ type Cortex struct {
 	configAPI    *api.API
 	configDB     db.DB
 	alertmanager *alertmanager.MultitenantAlertmanager
+
+	stopped bool
 }
 
 // New makes a new Cortex.
@@ -171,6 +175,7 @@ func New(cfg Config) (*Cortex, error) {
 	}
 
 	cortex := &Cortex{
+		cfg:    cfg,
 		target: cfg.Target,
 	}
 
@@ -238,11 +243,31 @@ func (t *Cortex) initModule(cfg *Config, m moduleName) error {
 
 // Run starts Cortex running, and blocks until a signal is received.
 func (t *Cortex) Run() error {
-	return t.server.Run()
+	var err error
+	done := make(chan struct{})
+	go func() {
+		err = t.server.Run()
+
+		close(done)
+	}()
+
+	// Initiate shutdown if its a job to flush data.
+	if t.cfg.Ingester.IsFlushJob {
+		_ = t.Stop()
+	}
+
+	<-done
+
+	return err
 }
 
 // Stop gracefully stops a Cortex.
 func (t *Cortex) Stop() error {
+	if t.stopped {
+		return nil
+	}
+
+	t.stopped = true
 	t.stopModule(t.target)
 	deps := orderedDeps(t.target)
 	// iterate over our deps in reverse order and call stopModule
