@@ -337,6 +337,7 @@ func (i *Ingester) StopIncomingRequests() {
 
 // Push implements client.IngesterServer
 func (i *Ingester) Push(ctx old_ctx.Context, req *client.WriteRequest) (*client.WriteResponse, error) {
+
 	if i.cfg.TSDBEnabled {
 		return i.v2Push(ctx, req)
 	}
@@ -377,7 +378,7 @@ func (i *Ingester) Push(ctx old_ctx.Context, req *client.WriteRequest) (*client.
 			return nil, err
 		}
 	}
-	client.ReuseSlice(req.Timeseries)
+	defer client.ReuseSlice(req.Timeseries)
 
 	if lastPartialErr != nil {
 		return &client.WriteResponse{}, lastPartialErr.WrappedError()
