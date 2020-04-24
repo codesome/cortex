@@ -775,7 +775,6 @@ func processWALWithRepair(startSegment int, userStates *userStates, params walRe
 
 // processWAL processes the records in the WAL concurrently.
 func processWAL(startSegment int, userStates *userStates, params walRecoveryParameters) error {
-
 	reader, closer, err := newWalReader(params.walDir, startSegment)
 	if err != nil {
 		return err
@@ -788,7 +787,7 @@ func processWAL(startSegment int, userStates *userStates, params walRecoveryPara
 		outputs = make([]chan *samplesWithUserID, params.numWorkers)
 		// errChan is to capture the errors from goroutine.
 		// The channel size is nWorkers to not block any worker if all of them error out.
-		errChan = make(chan error, params.numWorkers)
+		errChan = make(chan error, params.numWorkers+1)
 		shards  = make([]*samplesWithUserID, params.numWorkers)
 	)
 
@@ -810,90 +809,69 @@ func processWAL(startSegment int, userStates *userStates, params walRecoveryPara
 		record      = &Record{}
 		walRecord   = &WALRecord{}
 		lp          labelPairs
-	)
-Loop:
-	for reader.Next() {
-		select {
-		case capturedErr = <-errChan:
-			// Exit early on an error.
-			// Only acts upon the first error received.
-			break Loop
-		default:
+		decoded     = make(chan interface{}, 100)
+		recordPool  = sync.Pool{
+			New: func() interface{} {
+				return &Record{}
+			},
 		}
+		walRecordPool = sync.Pool{
+			New: func() interface{} {
+				return &WALRecord{}
+			},
+		}
+	)
 
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		defer close(decoded)
+		rec, walRec := recordPool.Get().(*Record), walRecordPool.Get().(*WALRecord)
 		record.Samples = record.Samples[:0]
 		record.Labels = record.Labels[:0]
-		// Only one of 'record' or 'walRecord' will have the data.
-		if err := decodeWALRecord(reader.Record(), record, walRecord); err != nil {
-			// We don't return here in order to close/drain all the channels and
-			// make sure all goroutines exit.
-			capturedErr = err
-			break Loop
-		}
-
-		if len(record.Labels) > 0 || len(walRecord.Series) > 0 {
-
-			var userID string
-			if len(walRecord.Series) > 0 {
-				userID = walRecord.UserID
-			} else {
-				userID = record.UserId
-			}
-
-			state := userStates.getOrCreate(userID)
-
-			createSeries := func(fingerprint model.Fingerprint, lbls labelPairs) error {
-				_, ok := state.fpToSeries.get(fingerprint)
-				if ok {
-					return nil
-				}
-				_, err := state.createSeriesWithFingerprint(fingerprint, lbls, nil, true)
-				return err
-			}
-
-			for _, labels := range record.Labels {
-				if err := createSeries(model.Fingerprint(labels.Fingerprint), labels.Labels); err != nil {
+		walRec.Samples = walRec.Samples[:0]
+		walRec.Series = walRec.Series[:0]
+		for reader.Next() {
+			select {
+			case capturedErr = <-errChan:
+				// Exit early on an error.
+				// Only acts upon the first error received.
+				return
+			default:
+				// Only one of 'record' or 'walRecord' will have the data.
+				if err := decodeWALRecord(reader.Record(), rec, walRec); err != nil {
 					// We don't return here in order to close/drain all the channels and
 					// make sure all goroutines exit.
 					capturedErr = err
-					break Loop
+					return
 				}
-			}
-
-			for _, s := range walRecord.Series {
-				lp = lp[:0]
-				for _, l := range s.Labels {
-					lp = append(lp, client.LabelAdapter(l))
+				if len(walRec.Samples) > 0 || len(walRec.Series) > 0 {
+					decoded <- walRec
+					walRec = walRecordPool.Get().(*WALRecord)
+					walRec.Samples = walRec.Samples[:0]
+					walRec.Series = walRec.Series[:0]
 				}
-				if err := createSeries(model.Fingerprint(s.Ref), lp); err != nil {
-					// We don't return here in order to close/drain all the channels and
-					// make sure all goroutines exit.
-					capturedErr = err
-					break Loop
+				if len(rec.Samples) > 0 || len(rec.Labels) > 0 {
+					decoded <- rec
+					rec = recordPool.Get().(*Record)
+					record.Samples = record.Samples[:0]
+					record.Labels = record.Labels[:0]
 				}
 			}
 		}
-
-		// We split up the samples into chunks of 5000 samples or less.
-		// With O(300 * #cores) in-flight sample batches, large scrapes could otherwise
-		// cause thousands of very large in flight buffers occupying large amounts
-		// of unused memory.
-		for len(record.Samples) > 0 || len(walRecord.Samples) > 0 {
-			m := 5000
-			var userID string
-			if len(record.Samples) > 0 {
-				userID = record.UserId
-				if len(record.Samples) < m {
-					m = len(record.Samples)
-				}
+	}()
+Loop:
+	for d := range decoded {
+		createSeries := func(state *userState, fingerprint model.Fingerprint, lbls labelPairs) error {
+			_, ok := state.fpToSeries.get(fingerprint)
+			if ok {
+				return nil
 			}
-			if len(walRecord.Samples) > 0 {
-				userID = walRecord.UserID
-				if len(walRecord.Samples) < m {
-					m = len(walRecord.Samples)
-				}
-			}
+			_, err := state.createSeriesWithFingerprint(fingerprint, lbls, nil, true)
+			return err
+		}
 
+		prepareSampleShards := func(userID string) {
 			for i := 0; i < params.numWorkers; i++ {
 				if len(shards[i].samples) == 0 {
 					// It is possible that the previous iteration did not put
@@ -912,8 +890,87 @@ Loop:
 					}
 				}
 			}
+		}
 
-			if len(record.Samples) > 0 {
+		drainShardsIntoInput := func() {
+			for i := 0; i < params.numWorkers; i++ {
+				if len(shards[i].samples) > 0 {
+					inputs[i] <- shards[i]
+				}
+			}
+		}
+
+		switch v := d.(type) {
+		case *WALRecord:
+			walRecord = v
+			userID := walRecord.UserID
+
+			state := userStates.getOrCreate(userID)
+			for _, s := range walRecord.Series {
+				lp = lp[:0]
+				for _, l := range s.Labels {
+					lp = append(lp, client.LabelAdapter(l))
+				}
+				if err := createSeries(state, model.Fingerprint(s.Ref), lp); err != nil {
+					// We don't return here in order to close/drain all the channels and
+					// make sure all goroutines exit.
+					errChan <- err
+					break Loop
+				}
+			}
+
+			// We split up the samples into chunks of 5000 samples or less.
+			// With O(300 * #cores) in-flight sample batches, large scrapes could otherwise
+			// cause thousands of very large in flight buffers occupying large amounts
+			// of unused memory.
+			for len(walRecord.Samples) > 0 {
+				m := 5000
+				userID := walRecord.UserID
+				if len(walRecord.Samples) < m {
+					m = len(walRecord.Samples)
+				}
+
+				prepareSampleShards(userID)
+
+				for _, sam := range walRecord.Samples[:m] {
+					mod := sam.Ref % uint64(params.numWorkers)
+					shards[mod].samples = append(shards[mod].samples, sam)
+				}
+
+				drainShardsIntoInput()
+
+				walRecord.Samples = walRecord.Samples[m:]
+			}
+
+			walRecordPool.Put(walRecord)
+
+		case *Record:
+			record = v
+			userID := record.UserId
+
+			state := userStates.getOrCreate(userID)
+			for _, labels := range record.Labels {
+				if err := createSeries(state, model.Fingerprint(labels.Fingerprint), labels.Labels); err != nil {
+					// We don't return here in order to close/drain all the channels and
+					// make sure all goroutines exit.
+					errChan <- err
+					break Loop
+				}
+			}
+
+			// We split up the samples into chunks of 5000 samples or less.
+			// With O(300 * #cores) in-flight sample batches, large scrapes could otherwise
+			// cause thousands of very large in flight buffers occupying large amounts
+			// of unused memory.
+			for len(record.Samples) > 0 {
+				m := 5000
+				userID := record.UserId
+				if len(record.Samples) < m {
+					m = len(record.Samples)
+				}
+
+				prepareSampleShards(userID)
+
 				for _, sam := range record.Samples[:m] {
 					mod := sam.Fingerprint % uint64(params.numWorkers)
 					shards[mod].samples = append(shards[mod].samples, tsdb_record.RefSample{
@@ -922,26 +979,16 @@ Loop:
 						V:   sam.Value,
 					})
 				}
-			}
-			if len(walRecord.Samples) > 0 {
-				for _, sam := range walRecord.Samples[:m] {
-					mod := sam.Ref % uint64(params.numWorkers)
-					shards[mod].samples = append(shards[mod].samples, sam)
-				}
-			}
 
-			for i := 0; i < params.numWorkers; i++ {
-				if len(shards[i].samples) > 0 {
-					inputs[i] <- shards[i]
-				}
-			}
+				drainShardsIntoInput()
 
-			if len(record.Samples) > 0 {
 				record.Samples = record.Samples[m:]
 			}
-			if len(walRecord.Samples) > 0 {
-				walRecord.Samples = walRecord.Samples[m:]
-			}
+
+			recordPool.Put(record)
+
+		default:
+			panic(fmt.Errorf("unexpected decoded type: %T", d))
 		}
 	}
 
@@ -1146,8 +1193,6 @@ func decodeWALRecord(b []byte, rec *Record, walRec *WALRecord) (err error) {
 		t      = RecordType(decbuf.Byte())
 	)
 
-	walRec.Series = walRec.Series[:0]
-	walRec.Samples = walRec.Samples[:0]
 	switch t {
 	case WALRecordSamples:
 		userID = decbuf.UvarintStr()
