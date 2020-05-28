@@ -79,3 +79,5 @@ replace k8s.io/client-go => k8s.io/client-go v0.17.5
 
 // >v1.2.0 has some conflict with prometheus/alertmanager. Hence prevent the upgrade till it's fixed.
 replace github.com/satori/go.uuid => github.com/satori/go.uuid v1.2.0
+
+replace github.com/prometheus/prometheus => github.com/codesome/prometheus v1.8.2-0.20200528104918-06fb91ca736d
