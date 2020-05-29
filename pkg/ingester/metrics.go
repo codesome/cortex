@@ -233,6 +233,8 @@ type tsdbMetrics struct {
 	tsdbTruncateFail        *prometheus.Desc
 	tsdbTruncateTotal       *prometheus.Desc
 	tsdbWritesFailed        *prometheus.Desc
+	tsdbChunksCreatedTotal  *prometheus.Desc
+	tsdbChunksRemovedTotal  *prometheus.Desc
 	checkpointDeleteFail    *prometheus.Desc
 	checkpointDeleteTotal   *prometheus.Desc
 	checkpointCreationFail  *prometheus.Desc
@@ -298,6 +300,14 @@ func newTSDBMetrics(r prometheus.Registerer) *tsdbMetrics {
 			"cortex_ingester_tsdb_wal_writes_failed_total",
 			"Total number of TSDB WAL writes that failed.",
 			nil, nil),
+		tsdbChunksCreatedTotal: prometheus.NewDesc(
+			"cortex_ingester_tsdb_head_chunks_created_total",
+			"Total number of TSDB WAL writes that failed.",
+			[]string{"user"}, nil),
+		tsdbChunksRemovedTotal: prometheus.NewDesc(
+			"cortex_ingester_tsdb_head_chunks_removed_total",
+			"Total number of TSDB WAL writes that failed.",
+			[]string{"user"}, nil),
 		checkpointDeleteFail: prometheus.NewDesc(
 			"cortex_ingester_tsdb_checkpoint_deletions_failed_total",
 			"Total number of TSDB checkpoint deletions that failed.",
@@ -346,6 +356,9 @@ func (sm *tsdbMetrics) Describe(out chan<- *prometheus.Desc) {
 
 	out <- sm.memSeriesCreatedTotal
 	out <- sm.memSeriesRemovedTotal
+
+	out <- sm.tsdbChunksCreatedTotal
+	out <- sm.tsdbChunksRemovedTotal
 }
 
 func (sm *tsdbMetrics) Collect(out chan<- prometheus.Metric) {
@@ -372,6 +385,9 @@ func (sm *tsdbMetrics) Collect(out chan<- prometheus.Metric) {
 
 	data.SendSumOfCountersPerUser(out, sm.memSeriesCreatedTotal, "prometheus_tsdb_head_series_created_total")
 	data.SendSumOfCountersPerUser(out, sm.memSeriesRemovedTotal, "prometheus_tsdb_head_series_removed_total")
+
+	data.SendSumOfCountersPerUser(out, sm.tsdbChunksCreatedTotal, "prometheus_tsdb_head_chunks_created_total")
+	data.SendSumOfCountersPerUser(out, sm.tsdbChunksRemovedTotal, "prometheus_tsdb_head_chunks_removed_total")
 }
 
 // make a copy of the map, so that metrics can be gathered while the new registry is being added.
