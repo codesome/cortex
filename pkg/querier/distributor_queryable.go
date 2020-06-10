@@ -52,7 +52,7 @@ type distributorQuerier struct {
 
 // Select implements storage.Querier interface.
 // The bool passed is ignored because the series is always sorted.
-func (q *distributorQuerier) Select(_ bool, sp *storage.SelectHints, matchers ...*labels.Matcher) (storage.SeriesSet, storage.Warnings, error) {
+func (q *distributorQuerier) Select(_ bool, sp *storage.SelectHints, matchers ...*labels.Matcher) storage.SeriesSet {
 	log, ctx := spanlogger.New(q.ctx, "distributorQuerier.Select")
 	defer log.Span.Finish()
 
@@ -61,24 +61,25 @@ func (q *distributorQuerier) Select(_ bool, sp *storage.SelectHints, matchers ..
 	if sp == nil {
 		ms, err := q.distributor.MetricsForLabelMatchers(ctx, model.Time(q.mint), model.Time(q.maxt), matchers...)
 		if err != nil {
-			return nil, nil, err
+			return nil
 		}
-		return series.MetricsToSeriesSet(ms), nil, nil
+		return series.MetricsToSeriesSet(ms)
 	}
 
 	mint, maxt := sp.Start, sp.End
 
 	if q.streaming {
-		return q.streamingSelect(*sp, matchers)
+		s, _, _ := q.streamingSelect(*sp, matchers)
+		return s
 	}
 
 	matrix, err := q.distributor.Query(ctx, model.Time(mint), model.Time(maxt), matchers...)
 	if err != nil {
-		return nil, nil, promql.ErrStorage{Err: err}
+		return nil
 	}
 
 	// Using MatrixToSeriesSet (and in turn NewConcreteSeriesSet), sorts the series.
-	return series.MatrixToSeriesSet(matrix), nil, nil
+	return series.MatrixToSeriesSet(matrix)
 }
 
 func (q *distributorQuerier) streamingSelect(sp storage.SelectHints, matchers []*labels.Matcher) (storage.SeriesSet, storage.Warnings, error) {

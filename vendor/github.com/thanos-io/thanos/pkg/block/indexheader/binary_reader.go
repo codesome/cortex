@@ -658,8 +658,8 @@ func skipNAndName(d *encoding.Decbuf, buf *int) {
 		// Keycount+LabelName are always the same number of bytes,
 		// and it's faster to skip than parse.
 		*buf = d.Len()
-		d.Uvarint()      // Keycount.
-		d.UvarintBytes() // Label name.
+		d.Uvarint()         // Keycount.
+		d.UvarintBytes(nil) // Label name.
 		*buf -= d.Len()
 		return
 	}
@@ -732,7 +732,7 @@ func (r BinaryReader) postingsOffset(name string, values ...string) ([]index.Ran
 			// │ └────────────────────────────────────────┘ │
 			// First, let's skip n and name.
 			skipNAndName(&d, &buf)
-			value := d.UvarintBytes() // Label value.
+			value := d.UvarintBytes(nil) // Label value.
 			postingOffset := int64(d.Uvarint64())
 
 			if len(newSameRngs) > 0 {
@@ -783,7 +783,7 @@ func (r BinaryReader) postingsOffset(name string, values ...string) ([]index.Ran
 				// We know it exists as we never go further in this loop than e.offsets[i, i+1].
 
 				skipNAndName(&d, &buf)
-				d.UvarintBytes() // Label value.
+				d.UvarintBytes(nil) // Label value.
 				postingOffset := int64(d.Uvarint64())
 
 				for j := range newSameRngs {
@@ -848,13 +848,13 @@ func (r BinaryReader) LabelValues(name string) ([]string, error) {
 			// These are always the same number of bytes,
 			// and it's faster to skip than parse.
 			skip = d.Len()
-			d.Uvarint()      // Keycount.
-			d.UvarintBytes() // Label name.
+			d.Uvarint()         // Keycount.
+			d.UvarintBytes(nil) // Label name.
 			skip -= d.Len()
 		} else {
 			d.Skip(skip)
 		}
-		s := yoloString(d.UvarintBytes()) // Label value.
+		s := yoloString(d.UvarintBytes(nil)) // Label value.
 		values = append(values, s)
 		if s == lastVal {
 			break

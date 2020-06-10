@@ -492,10 +492,7 @@ func (i *Ingester) v2Query(ctx context.Context, req *client.QueryRequest) (*clie
 	defer q.Close()
 
 	// It's not required to return sorted series because series are sorted by the Cortex querier.
-	ss, _, err := q.Select(false, nil, matchers...)
-	if err != nil {
-		return nil, err
-	}
+	ss := q.Select(false, nil, matchers...)
 
 	numSamples := 0
 
@@ -615,10 +612,7 @@ func (i *Ingester) v2MetricsForLabelMatchers(ctx context.Context, req *client.Me
 	}
 
 	for _, matchers := range matchersSet {
-		seriesSet, _, err := q.Select(false, nil, matchers...)
-		if err != nil {
-			return nil, err
-		}
+		seriesSet := q.Select(false, nil, matchers...)
 
 		for seriesSet.Next() {
 			if seriesSet.Err() != nil {
@@ -723,10 +717,7 @@ func (i *Ingester) v2QueryStream(req *client.QueryRequest, stream client.Ingeste
 	defer q.Close()
 
 	// It's not required to return sorted series because series are sorted by the Cortex querier.
-	ss, _, err := q.Select(false, nil, matchers...)
-	if err != nil {
-		return err
-	}
+	ss := q.Select(false, nil, matchers...)
 
 	timeseries := make([]client.TimeSeries, 0, queryStreamBatchSize)
 	batchSize := 0

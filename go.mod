@@ -12,6 +12,7 @@ require (
 	github.com/alecthomas/units v0.0.0-20190924025748-f65c72e2690d
 	github.com/armon/go-metrics v0.3.3
 	github.com/aws/aws-sdk-go v1.31.9
+	github.com/baiyubin/aliyun-sts-go-sdk v0.0.0-20180326062324-cfa1a18b161f // indirect
 	github.com/blang/semver v3.5.0+incompatible
 	github.com/bradfitz/gomemcache v0.0.0-20190913173617-a41fca850d0b
 	github.com/cespare/xxhash v1.1.0
@@ -45,7 +46,7 @@ require (
 	github.com/prometheus/client_golang v1.6.1-0.20200604110148-03575cad4e55
 	github.com/prometheus/client_model v0.2.0
 	github.com/prometheus/common v0.10.0
-	github.com/prometheus/prometheus v1.8.2-0.20200609052543-1627d234da06
+	github.com/prometheus/prometheus v1.8.2-0.20200609165731-66dfb951c4ca
 	github.com/rafaeljusto/redigomock v0.0.0-20190202135759-257e089e14a1
 	github.com/segmentio/fasthash v0.0.0-20180216231524-a72b379d632e
 	github.com/spf13/afero v1.2.2
@@ -80,3 +81,7 @@ replace github.com/satori/go.uuid => github.com/satori/go.uuid v1.2.0
 
 // Use fork of gocql that has gokit logs and Prometheus metrics.
 replace github.com/gocql/gocql => github.com/grafana/gocql v0.0.0-20200605141915-ba5dc39ece85
+
+replace github.com/prometheus/prometheus => github.com/codesome/prometheus v1.8.2-0.20200610092210-6d8de5ac00c9
+
+replace github.com/thanos-io/thanos => github.com/codesome/thanos v0.12.3-0.20200610090039-e0850d831efb

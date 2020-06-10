@@ -60,6 +60,10 @@ func (c *ConcreteSeriesSet) Err() error {
 	return nil
 }
 
+func (c *ConcreteSeriesSet) Warnings() storage.Warnings {
+	return nil
+}
+
 // ConcreteSeries implements storage.Series.
 type ConcreteSeries struct {
 	labels  labels.Labels
@@ -224,6 +228,10 @@ func (d DeletedSeriesSet) Err() error {
 	return d.seriesSet.Err()
 }
 
+func (d DeletedSeriesSet) Warnings() storage.Warnings {
+	return nil
+}
+
 type DeletedSeries struct {
 	series           storage.Series
 	deletedIntervals []model.Interval
@@ -349,9 +357,10 @@ func (emptySeriesIterator) Err() error {
 
 type emptySeriesSet struct{}
 
-func (emptySeriesSet) Next() bool         { return false }
-func (emptySeriesSet) At() storage.Series { return nil }
-func (emptySeriesSet) Err() error         { return nil }
+func (emptySeriesSet) Next() bool                 { return false }
+func (emptySeriesSet) At() storage.Series         { return nil }
+func (emptySeriesSet) Err() error                 { return nil }
+func (emptySeriesSet) Warnings() storage.Warnings { return nil }
 
 // NewEmptySeriesSet returns a new series set that contains no series.
 func NewEmptySeriesSet() storage.SeriesSet {

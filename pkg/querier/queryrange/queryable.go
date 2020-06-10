@@ -45,7 +45,7 @@ type ShardedQuerier struct {
 
 // Select returns a set of series that matches the given label matchers.
 // The bool passed is ignored because the series is always sorted.
-func (q *ShardedQuerier) Select(_ bool, _ *storage.SelectHints, matchers ...*labels.Matcher) (storage.SeriesSet, storage.Warnings, error) {
+func (q *ShardedQuerier) Select(_ bool, _ *storage.SelectHints, matchers ...*labels.Matcher) storage.SeriesSet {
 	var embeddedQuery string
 	var isEmbedded bool
 	for _, matcher := range matchers {
@@ -60,13 +60,14 @@ func (q *ShardedQuerier) Select(_ bool, _ *storage.SelectHints, matchers ...*lab
 
 	if isEmbedded {
 		if embeddedQuery != "" {
-			return q.handleEmbeddedQuery(embeddedQuery)
+			s, _, _ := q.handleEmbeddedQuery(embeddedQuery)
+			return s
 		}
-		return nil, nil, errors.Errorf(missingEmbeddedQueryMsg)
+		return nil
 
 	}
 
-	return nil, nil, errors.Errorf(nonEmbeddedErrMsg)
+	return nil
 }
 
 // handleEmbeddedQuery defers execution of an encoded query to a downstream Handler

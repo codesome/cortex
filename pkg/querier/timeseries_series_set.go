@@ -38,6 +38,8 @@ func (t *timeSeriesSeriesSet) At() storage.Series {
 // Err implements SeriesSet interface
 func (t *timeSeriesSeriesSet) Err() error { return nil }
 
+func (t *timeSeriesSeriesSet) Warnings() storage.Warnings { return nil }
+
 // timeseries is a type wrapper that implements the storage.Series interface
 type timeseries struct {
 	series client.TimeSeries
