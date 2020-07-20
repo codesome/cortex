@@ -3,17 +3,16 @@ package frontend
 import (
 	"context"
 	"flag"
-	"fmt"
 	"math/rand"
 	"time"
 
 	"github.com/go-kit/kit/log"
 	"github.com/go-kit/kit/log/level"
-	"github.com/pkg/errors"
 	"github.com/weaveworks/common/httpgrpc/server"
 	"github.com/weaveworks/common/middleware"
 	"google.golang.org/grpc"
-	"google.golang.org/grpc/naming"
+	"google.golang.org/grpc/resolver"
+	"google.golang.org/grpc/serviceconfig"
 
 	"github.com/cortexproject/cortex/pkg/querier"
 	"github.com/cortexproject/cortex/pkg/util/grpcclient"
@@ -35,6 +34,7 @@ func (cfg *WorkerConfig) RegisterFlags(f *flag.FlagSet) {
 	f.StringVar(&cfg.Address, "querier.frontend-address", "", "Address of query frontend service, in host:port format.")
 	f.IntVar(&cfg.Parallelism, "querier.worker-parallelism", 10, "Number of simultaneous queries to process per query frontend.")
 	f.BoolVar(&cfg.MatchMaxConcurrency, "querier.worker-match-max-concurrent", false, "Force worker concurrency to match the -querier.max-concurrent option.  Overrides querier.worker-parallelism.")
+	// TODO: mark this as deprecated.
 	f.DurationVar(&cfg.DNSLookupDuration, "querier.dns-lookup-period", 10*time.Second, "How often to query DNS.")
 
 	cfg.GRPCClientConfig.RegisterFlagsWithPrefix("querier.frontend-client", f)
@@ -46,9 +46,11 @@ type worker struct {
 	querierCfg querier.Config
 	log        log.Logger
 	server     *server.Server
+	service    *services.BasicService
 
-	watcher  naming.Watcher //nolint:staticcheck //Skipping for now. If you still see this more than likely issue https://github.com/cortexproject/cortex/issues/2015 has not yet been addressed.
+	resolver resolver.Resolver
 	managers map[string]*frontendManager
+	quit     chan struct{}
 }
 
 // NewWorker creates a new worker and returns a service that is wrapping it.
@@ -59,25 +61,17 @@ func NewWorker(cfg WorkerConfig, querierCfg querier.Config, server *server.Serve
 		return nil, nil
 	}
 
-	resolver, err := naming.NewDNSResolverWithFreq(cfg.DNSLookupDuration)
-	if err != nil {
-		return nil, err
-	}
-
-	watcher, err := resolver.Resolve(cfg.Address)
-	if err != nil {
-		return nil, err
-	}
-
 	w := &worker{
 		cfg:        cfg,
 		querierCfg: querierCfg,
 		log:        log,
 		server:     server,
-		watcher:    watcher,
 		managers:   map[string]*frontendManager{},
+		quit:       make(chan struct{}),
 	}
-	return services.NewBasicService(nil, w.watchDNSLoop, w.stopping), nil
+	w.service = services.NewBasicService(nil, w.running, w.stopping)
+
+	return w.service, nil
 }
 
 func (w *worker) stopping(_ error) error {
@@ -88,53 +82,88 @@ func (w *worker) stopping(_ error) error {
 	return nil
 }
 
-// watchDNSLoop watches for changes in DNS and starts or stops workers.
-func (w *worker) watchDNSLoop(servCtx context.Context) error {
-	go func() {
-		// Close the watcher, when this service is asked to stop.
-		// Closing the watcher makes watchDNSLoop exit, since it only iterates on watcher updates, and has no other
-		// way to stop. We cannot close the watcher in `stopping` method, because it is only called *after*
-		// watchDNSLoop exits.
-		<-servCtx.Done()
-		w.watcher.Close()
-	}()
+// UpdateState implements resolver.ClientConn interface.
+// It adds or removes workers based on updated DNS state.
+func (w *worker) UpdateState(state resolver.State) {
+	select {
+	case <-w.quit:
+		return
+	default:
+	}
 
-	for {
-		updates, err := w.watcher.Next()
+	newManagers := make(map[string]*frontendManager, len(state.Addresses))
+
+	// Add new addresses.
+	for _, addr := range state.Addresses {
+		if m, ok := w.managers[addr.Addr]; ok {
+			newManagers[addr.Addr] = m
+			continue
+		}
+
+		level.Debug(w.log).Log("msg", "adding connection", "addr", addr.Addr)
+		client, err := w.connect(w.service.ServiceContext(), addr.Addr)
 		if err != nil {
-			// watcher.Next returns error when Close is called, but we call Close when our context is done.
-			// we don't want to report error in that case.
-			if servCtx.Err() != nil {
-				return nil
-			}
-			return errors.Wrapf(err, "error from DNS watcher")
+			level.Error(w.log).Log("msg", "error connecting", "addr", addr.Addr, "err", err)
+			continue
 		}
+		newManagers[addr.Addr] = newFrontendManager(w.service.ServiceContext(), w.log, w.server, client, w.cfg.GRPCClientConfig)
+	}
 
-		for _, update := range updates {
-			switch update.Op {
-			case naming.Add:
-				level.Debug(w.log).Log("msg", "adding connection", "addr", update.Addr)
-				client, err := w.connect(servCtx, update.Addr)
-				if err != nil {
-					level.Error(w.log).Log("msg", "error connecting", "addr", update.Addr, "err", err)
-					continue
-				}
-
-				w.managers[update.Addr] = newFrontendManager(servCtx, w.log, w.server, client, w.cfg.GRPCClientConfig)
-
-			case naming.Delete:
-				level.Debug(w.log).Log("msg", "removing connection", "addr", update.Addr)
-				if mgr, ok := w.managers[update.Addr]; ok {
-					mgr.stop()
-					delete(w.managers, update.Addr)
-				}
-
-			default:
-				return fmt.Errorf("unknown op: %v", update.Op)
-			}
+	// Stop old addresses.
+	for addr, mngr := range w.managers {
+		if _, ok := newManagers[addr]; ok {
+			continue
 		}
+		level.Debug(w.log).Log("msg", "removing connection", "addr", addr)
+		mngr.stop()
+	}
 
-		w.resetConcurrency()
+	// TODO: Check if UpdateState can be called concurrently.
+	w.managers = newManagers
+	w.resetConcurrency()
+}
+
+// ReportError implements resolver.ClientConn interface.
+func (w *worker) ReportError(err error) {
+	// TODO: How to exit on non-recoverable error. 'naming' package had it.
+	level.Error(w.log).Log("msg", "resolver error", "err", err)
+}
+
+// NewAddress implements resolver.ClientConn interface.
+// Deprecated in favour of UpdateState.
+func (w *worker) NewAddress([]resolver.Address) {}
+
+// NewServiceConfig implements resolver.ClientConn interface.
+// Deprecated in favour of UpdateState.
+func (w *worker) NewServiceConfig(string) {}
+
+// ParseServiceConfig implements resolver.ClientConn interface.
+func (w *worker) ParseServiceConfig(string) *serviceconfig.ParseResult {
+	return nil
+}
+
+// watchDNSLoop watches for changes in DNS and starts or stops workers.
+func (w *worker) running(servCtx context.Context) error {
+	defer close(w.quit)
+
+	builder := resolver.Get("dns")
+	r, err := builder.Build(
+		resolver.Target{
+			Scheme:    "dns",
+			Authority: "",
+			Endpoint:  w.cfg.Address,
+		},
+		w,
+		resolver.BuildOptions{},
+	)
+	if err != nil {
+		return err
+	}
+	w.resolver = r
+
+	select {
+	case <-servCtx.Done():
+		return nil
 	}
 }
 

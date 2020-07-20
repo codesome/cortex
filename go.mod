@@ -61,8 +61,8 @@ require (
 	golang.org/x/sync v0.0.0-20200317015054-43a5402ce75a
 	golang.org/x/time v0.0.0-20200416051211-89c76fbcd5d1
 	google.golang.org/api v0.26.0
-	google.golang.org/grpc v1.30.0
-	google.golang.org/grpc/examples v0.0.0-20200716233830-6dc7938fe875 // indirect
+	google.golang.org/genproto v0.0.0-20200624020401-64a14ca9d1ad // indirect
+	google.golang.org/grpc v1.29.1
 	gopkg.in/yaml.v2 v2.3.0
 	sigs.k8s.io/yaml v1.2.0
 )
