@@ -1,0 +1,68 @@
+version: '3.4'
+services:
+
+  # Storage
+  minio:
+    image: minio/minio
+    command: [ "server", "/data" ]
+    environment:
+      - MINIO_ACCESS_KEY=cortex
+      - MINIO_SECRET_KEY=supersecret
+    ports:
+      - 9000:9000
+    volumes:
+      - .data-minio:/data:delegated
+
+  cortex:
+    build:
+      context:    .
+      dockerfile: dev.dockerfile
+    image: cortex
+    command: ["sh", "-c", "sleep 3 && exec ./cortex -config.file=./config/cortex.yaml"]
+    depends_on:
+      - minio
+      - consul
+    volumes:
+      - ./config:/cortex/config
+
+  load-balancer:
+    image: nginx:1.19
+    ports:
+      - 8080:80
+    depends_on:
+      - cortex
+    volumes:
+      - ./config:/etc/nginx
+
+  prometheus1:
+    image: prom/prometheus:v2.20.0
+    command: ["--config.file=/etc/prometheus/prometheus1.yaml"]
+    volumes:
+      - ./config:/etc/prometheus
+    ports:
+      - 9090:9090
+
+  prometheus2:
+    image: prom/prometheus:v2.20.0
+    command: ["--config.file=/etc/prometheus/prometheus2.yaml"]
+    volumes:
+      - ./config:/etc/prometheus
+    ports:
+      - 9091:9090
+
+  # For some traffic
+  node-exporter:
+    image: prom/node-exporter
+    ports:
+      - 9100:9100
+
+  grafana:
+    image: grafana/grafana:7.3.1
+    ports:
+      - 3000:3000
+
+  consul:
+    image: consul
+    command: [ "agent", "-dev" ,"-client=0.0.0.0", "-log-level=info" ]
+    ports:
+      - 8500:8500

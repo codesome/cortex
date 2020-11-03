@@ -1,0 +1,29 @@
+global:
+  scrape_interval: 2s
+  external_labels:
+    cluster: demo
+    __replica__: prometheus-2
+
+scrape_configs:
+  - job_name: cortex
+    dns_sd_configs:
+      - names: [ 'cortex' ]
+        type: 'A'
+        port: 80
+        refresh_interval: 5s
+  - job_name: 'prometheus-1'
+    static_configs:
+      - targets: [ 'prometheus1:9090' ]
+  - job_name: 'prometheus-2'
+    static_configs:
+      - targets: [ 'prometheus2:9090' ]
+  - job_name: 'node-exporter-a'
+    static_configs:
+      - targets: [ 'node-exporter:9100' ]
+  - job_name: 'node-exporter-b'
+    static_configs:
+      - targets: [ 'node-exporter:9100' ]
+
+
+remote_write:
+  - url: http://cortex:80/api/prom/push
