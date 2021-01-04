@@ -109,7 +109,7 @@ services:
     volumes:
       - ./config:/cortex/config
       - .data-ingester-2:/tmp/cortex-tsdb-ingester:delegated
-    
+
   querier:
     build:
       context:    .
